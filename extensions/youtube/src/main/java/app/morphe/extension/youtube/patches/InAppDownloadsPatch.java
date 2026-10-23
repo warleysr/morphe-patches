@@ -1,12 +1,16 @@
 /*
  * Copyright 2026 Morphe.
- * https://github.com/MorpheApp/morphe-patches/pull/3905
+ * https://github.com/MorpheApp/morphe-patches
  *
- * See the included NOTICE file for GPLv3 Section 7 terms that apply to this code.
+ * Original hard forked code:
+ * https://github.com/ReVanced/revanced-patches/commit/724e6d61b2ecd868c1a9a37d465a688e83a74799
+ *
+ * See the included NOTICE file for GPLv3 Section 7 terms that apply to Morphe contributions.
  */
 
 package app.morphe.extension.youtube.patches;
 
+import android.util.Log;
 
 import androidx.annotation.Nullable;
 
@@ -54,17 +58,20 @@ public final class InAppDownloadsPatch {
             OfflineFormatType.OFFLINE_FORMAT_TYPE_SD_480,
             OfflineFormatType.OFFLINE_FORMAT_TYPE_SD,
             OfflineFormatType.OFFLINE_FORMAT_TYPE_LD,
+            OfflineFormatType.OFFLINE_FORMAT_TYPE_AUDIO_ONLY,
     };
 
     private static final String[] DEFAULT_FORMAT_LABELS = {
-            "1080p", "720p", "480p", "360p", "144p"
+            "1080p", "720p", "480p", "360p", "144p", "Audio"
     };
+
+    private static final String AUDIO_FORMAT_LABEL = "Audio";
 
     /**
      * Clients that answer with stream urls, which the app can save.
      * The visionOS streams need no JavaScript challenge, whose unsolved streams the server sends slowly.
      */
-    private static final List<ClientType> DOWNLOAD_CLIENTS = List.of(
+    static final List<ClientType> DOWNLOAD_CLIENTS = List.of(
             ClientType.VISIONOS_1_03,
             ClientType.VISIONOS_1_02,
             ClientType.ANDROID_VR_DASH,
@@ -83,15 +90,16 @@ public final class InAppDownloadsPatch {
      */
     private static final String UNSAVABLE_AUDIO_MIME_TYPE_PREFIX = "audio/webm";
 
+    private static final String TAG = "morphe-download";
+
     /**
      * Injection point.
      * <p>
-     * Called for every command the app resolves.
-     * The Download button asks the server which download action to take, and the server answers
-     * with the Premium upsell. Instead, the video is saved directly.
+     * Resolves the download action of a video by saving the video,
+     * instead of asking the server which answers with the Premium upsell.
      *
-     * @param command Command that is resolved.
-     * @return A command that saves the video, or null to keep the original.
+     * @param command Command of the download action endpoint.
+     * @return A command that saves the video instead, or null to keep the original.
      */
     @Nullable
     public static byte[] replaceDownloadActionCommand(@Nullable MessageLite command) {
@@ -113,10 +121,11 @@ public final class InAppDownloadsPatch {
                 return null;
             }
 
-            Logger.printDebug(() -> "Replacing download action with saving the video: " + videoId);
+            Log.i(TAG, "Download button clicked for videoId: " + videoId);
+
             return saveVideoCommand(videoId, List.of()).toByteArray();
         } catch (Exception ex) {
-            Logger.printException(() -> "replaceDownloadActionCommand failure", ex);
+            Log.e(TAG, "replaceDownloadActionCommand failure", ex);
             return null;
         }
     }
@@ -138,7 +147,9 @@ public final class InAppDownloadsPatch {
             }
 
             OfflineabilityRenderer renderer = OfflineabilityRenderer.parseFrom(message.toByteArray());
-            if (renderer.getOfflineable() && !hasLockedFormat(renderer.getFormatsList())) {
+            boolean needsAudioUnlocked = Settings.DOWNLOAD_AUDIO_ONLY.get()
+                    || !hasAudioFormat(renderer.getFormatsList());
+            if (renderer.getOfflineable() && !hasLockedFormat(renderer.getFormatsList()) && !needsAudioUnlocked) {
                 return null;
             }
 
@@ -222,28 +233,48 @@ public final class InAppDownloadsPatch {
             }
             final boolean allowed = original.getOfflineState().getActionValue()
                     == OfflineStateAction.OFFLINE_STATE_ACTION_OK_VALUE;
+
+            String videoId = original.hasVideoDetails() ? original.getVideoDetails().getVideoId() : "";
+            boolean isAudio = Settings.DOWNLOAD_AUDIO_ONLY.get();
+
+            Log.i(TAG, "replaceDeclinedOfflinePlayerResponse: videoId=" + videoId
+                    + ", allowed=" + allowed + ", isAudio=" + isAudio
+                    + ", saveToDevice=" + Settings.SAVE_AUDIO_TO_DEVICE.get());
+
             if (allowed && original.getStreamingData().getAdaptiveFormatsCount() > 0) {
+                if (Settings.SAVE_AUDIO_TO_DEVICE.get()) {
+                    AudioDownloader.downloadAudioToDevice(videoId);
+                }
+                if (isAudio) {
+                    return original.toBuilder()
+                            .setStreamingData(savableStreamingData(original.getStreamingData(), true))
+                            .build()
+                            .toByteArray();
+                }
                 return null;
             }
 
-            String videoId = original.getVideoDetails().getVideoId();
             if (videoId.isEmpty()) {
-                Logger.printDebug(() -> "Declined offline player response has no video id");
+                Log.w(TAG, "Declined offline player response has no video id");
                 return null;
             }
 
             StreamingDataRequest.StreamData streams = StreamingDataRequest.fetchRequestForDownload(
                     videoId, DOWNLOAD_CLIENTS, DOWNLOAD_CLIENTS.get(0)).getStream();
             if (streams == null) {
-                Logger.printDebug(() -> "No streams to save the video with: " + videoId);
+                Log.w(TAG, "No streams to save the video with: " + videoId);
                 return null;
+            }
+
+            if (Settings.SAVE_AUDIO_TO_DEVICE.get()) {
+                AudioDownloader.downloadAudioToDevice(videoId, streams.streamingData());
             }
 
             // The declined response lacks the parts the app needs to select the streams to save,
             // such as the player config. The response of the other client is used instead,
             // and only the offline state token and player config are kept from the declined response.
             OfflinePlayerResponse.Builder builder = OfflinePlayerResponse.parseFrom(streams.streamingData()).toBuilder();
-            builder.setStreamingData(savableStreamingData(builder.getStreamingData()))
+            builder.setStreamingData(savableStreamingData(builder.getStreamingData(), isAudio))
                     .setOfflineState(OfflineState.newBuilder()
                             .setToken(original.getOfflineState().getToken())
                             .setPolicyLifetimeSeconds(OFFLINE_POLICY_LIFETIME_SECONDS)
@@ -293,10 +324,31 @@ public final class InAppDownloadsPatch {
         return false;
     }
 
+    private static boolean hasAudioFormat(List<OfflineFormat> formats) {
+        for (OfflineFormat format : formats) {
+            if (format.getFormatType() == OfflineFormatType.OFFLINE_FORMAT_TYPE_AUDIO_ONLY) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static OfflineFormat createAudioFormat() {
+        return OfflineFormat.newBuilder()
+                .setName(OfflineFormatLabel.newBuilder().setSimpleText(AUDIO_FORMAT_LABEL))
+                .setFormatType(OfflineFormatType.OFFLINE_FORMAT_TYPE_AUDIO_ONLY)
+                .setAvailability(OfflineFormatAvailability.OFFLINE_FORMAT_AVAILABILITY_FREE)
+                .build();
+    }
+
     /**
      * @return The formats with the Premium formats available, or the default formats if there are none.
      */
     private static List<OfflineFormat> unlockedFormats(List<OfflineFormat> formats) {
+        if (Settings.DOWNLOAD_AUDIO_ONLY.get()) {
+            return List.of(createAudioFormat());
+        }
+
         List<OfflineFormat> unlocked = new ArrayList<>();
         if (formats.isEmpty()) {
             for (int i = 0; i < DEFAULT_FORMAT_TYPES.length; i++) {
@@ -309,13 +361,22 @@ public final class InAppDownloadsPatch {
             return unlocked;
         }
 
+        boolean hasAudio = false;
         for (OfflineFormat format : formats) {
+            if (format.getFormatType() == OfflineFormatType.OFFLINE_FORMAT_TYPE_AUDIO_ONLY) {
+                hasAudio = true;
+            }
             unlocked.add(isLocked(format)
                     ? format.toBuilder()
                             .setAvailability(OfflineFormatAvailability.OFFLINE_FORMAT_AVAILABILITY_FREE)
                             .build()
                     : format);
         }
+
+        if (!hasAudio) {
+            unlocked.add(createAudioFormat());
+        }
+
         return unlocked;
     }
 
@@ -347,15 +408,26 @@ public final class InAppDownloadsPatch {
         return count;
     }
 
-    private static OfflineStreamingData savableStreamingData(OfflineStreamingData streamingData) {
+    private static OfflineStreamingData savableStreamingData(OfflineStreamingData streamingData, boolean audioOnly) {
         OfflineStreamingData.Builder builder = streamingData.toBuilder();
         for (int i = 0, count = builder.getAdaptiveFormatsCount(); i < count; i++) {
             OfflineStreamFormat format = builder.getAdaptiveFormats(i);
-            if (isSavableMimeType(format.getMimeType())) {
-                builder.setAdaptiveFormats(i, format.toBuilder().setOfflineEligible(true));
+            String mimeType = format.getMimeType();
+            if (isSavableMimeType(mimeType)) {
+                if (audioOnly) {
+                    builder.setAdaptiveFormats(i, format.toBuilder().setOfflineEligible(isAudioMimeType(mimeType)));
+                } else {
+                    builder.setAdaptiveFormats(i, format.toBuilder().setOfflineEligible(true));
+                }
+            } else {
+                builder.setAdaptiveFormats(i, format.toBuilder().setOfflineEligible(false));
             }
         }
         return builder.build();
+    }
+
+    private static boolean isAudioMimeType(String mimeType) {
+        return mimeType.startsWith("audio/");
     }
 
     private static boolean isSavableMimeType(String mimeType) {

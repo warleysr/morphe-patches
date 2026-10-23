@@ -107,6 +107,8 @@ public class SharedYouTubeSettings extends BaseSettings {
 
     // Downloads
     public static final EnumSetting<DownloadMode> DOWNLOAD_MODE = new EnumSetting<>("morphe_download_mode", DownloadMode.DEFAULT);
+    public static final BooleanSetting DOWNLOAD_AUDIO_ONLY = new BooleanSetting("morphe_download_audio_only", FALSE, DOWNLOAD_MODE.availability(DownloadMode.IN_APP));
+    public static final BooleanSetting SAVE_AUDIO_TO_DEVICE = new BooleanSetting("morphe_save_audio_to_device", FALSE, DOWNLOAD_MODE.availability(DownloadMode.IN_APP));
     // YouTube only.
     public static final BooleanSetting EXTERNAL_DOWNLOADER_OVERLAY_BUTTON = new BooleanSetting("morphe_external_downloader_overlay_button", FALSE, true);
     // YouTube Music only.

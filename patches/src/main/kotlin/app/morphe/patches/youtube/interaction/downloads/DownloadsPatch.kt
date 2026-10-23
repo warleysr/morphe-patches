@@ -53,6 +53,8 @@ private val downloadsResourcePatch = resourcePatch {
                 sorting = Sorting.UNSORTED,
                 preferences = setOf(
                     ListPreference("morphe_download_mode"),
+                    SwitchPreference("morphe_download_audio_only", summary = true),
+                    SwitchPreference("morphe_save_audio_to_device", summary = true),
                     SwitchPreference("morphe_external_downloader_overlay_button", summary = true),
                     TextPreference(
                         "morphe_external_downloader_name",

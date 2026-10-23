@@ -462,6 +462,10 @@ Depois que um vídeo com o botão Ask for aberto uma vez, o recurso funciona com
   <string name="morphe_disable_chapter_skip_double_tap_summary">Desativa o toque duplo com dois dedos para pular capítulos</string>
   <!-- interaction.downloads.downloadsPatch -->
   <string name="morphe_external_downloader_screen_summary">Faça o download de vídeos, podcasts ou músicas com apps de terceiros</string>
+  <string name="morphe_download_audio_only_title">Baixar apenas áudio</string>
+  <string name="morphe_download_audio_only_summary">Baixa apenas a faixa de áudio direto dos servidores do YouTube</string>
+  <string name="morphe_save_audio_to_device_title">Salvar áudio no dispositivo</string>
+  <string name="morphe_save_audio_to_device_summary">Salva o arquivo de áudio (.m4a) no armazenamento externo para players de música</string>
   <string name="morphe_external_downloader_overlay_button_title">Exibir botão de download da sobreposição do player</string>
   <string name="morphe_external_downloader_overlay_button_summary">Mostra um botão no player de vídeo que abre seu app de download externo</string>
   <!-- video.voiceovertranslation.voiceOverTranslationPatch -->
